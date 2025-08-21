@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Particle Clock (Delicious Candy Style)</title>
+  <style>
+    html, body { height: 100%; margin: 0; background: #0b0f14; color: #e6edf3; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .overlay { position: fixed; left: 12px; bottom: 12px; font-size: 12px; opacity: .6; user-select: none; letter-spacing: .02em; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div class="overlay">Vanilla JS Particle Clock</div>
+
+  <script>
+  ;(() => {
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const DPR = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+
+    // サンプリング密度と基本半径
+    const BASE_GRID = Math.max(6, Math.round(8 * DPR));
+    const BASE_RADIUS = Math.max(1, Math.round(1.6 * DPR));
+
+    // 水面のうねり
+    const AMP_X = 36;
+    const AMP_Y = 12;
+    const PERIOD = 10;
+    const OMEGA = (2 * Math.PI) / PERIOD;
+
+    // 粒サイズの“呼吸”
+    const SIZE_PERIOD = 8;
+    const OMEGA_SIZE = (2 * Math.PI) / SIZE_PERIOD;
+    const SIZE_AMP_MIN = 0.10;
+    const SIZE_AMP_MAX = 0.50;
+
+    // カラーパレット（キャンディっぽく鮮やかに）
+    const TIME_HUE_PERIOD = 40;       // 40秒周期でカラフルに漂流
+    const OMEGA_HUE = (2 * Math.PI) / TIME_HUE_PERIOD;
+    const SIZE_HUE_SWING = 45;        // サイズ変化で±45°色相スウィング
+    const TIME_HUE_SWING = 20;        // 時間による±20°ドリフト
+    const HUE_BASE_MIN = 0;           // レッド
+    const HUE_BASE_MAX = 360;         // 全色ランダム
+
+    let W = 0, H = 0;
+    const oc = document.createElement('canvas');
+    const octx = oc.getContext('2d');
+    let targets = [];
+
+    function resize() {
+      const cssW = window.innerWidth;
+      const cssH = window.innerHeight;
+      W = canvas.width = Math.floor(cssW * DPR);
+      H = canvas.height = Math.floor(cssH * DPR);
+      canvas.style.width = cssW + 'px';
+      canvas.style.height = cssH + 'px';
+      setTargetsForText(currentTimeString());
+      render(0);
+    }
+
+    window.addEventListener('resize', resize);
+
+    function pad(n) { return n < 10 ? '0' + n : '' + n; }
+    function currentTimeString() {
+      const d = new Date();
+      return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    function setTargetsForText(text) {
+      oc.width = W; oc.height = H;
+      octx.clearRect(0, 0, W, H);
+
+      const maxBoxW = W * 0.86;
+      const maxBoxH = H * 0.42;
+      let fontSize = Math.min(H * 0.28, 400 * DPR);
+      octx.textAlign = 'center';
+      octx.textBaseline = 'middle';
+
+      for (let i = 0; i < 8; i++) {
+        octx.font = '700 ' + fontSize + 'px ui-sans-serif, system-ui, Segoe UI, Roboto, Helvetica, Arial';
+        const metrics = octx.measureText(text);
+        if (metrics.width > maxBoxW || fontSize > maxBoxH) {
+          fontSize *= 0.9;
+        } else {
+          break;
+        }
+      }
+
+      octx.font = '700 ' + fontSize + 'px ui-sans-serif, system-ui, Segoe UI, Roboto, Helvetica, Arial';
+      octx.fillStyle = '#ffffff';
+      octx.fillText(text, W / 2, H / 2);
+
+      const newTargets = [];
+      const step = BASE_GRID;
+      const img = octx.getImageData(0, 0, W, H).data;
+      for (let y = 0; y < H; y += step) {
+        for (let x = 0; x < W; x += step) {
+          const idx = (y * W + x) * 4 + 3;
+          if (img[idx] > 128) {
+            let existing = null;
+            for (let k = 0; k < targets.length; k++) {
+              const pt = targets[k];
+              if (pt.origX === x && pt.origY === y) { existing = pt; break; }
+            }
+            if (existing) {
+              newTargets.push(existing);
+            } else {
+              const radius = BASE_RADIUS * (0.7 + Math.random() * 0.6);
+              const jitterX = (Math.random() - 0.5) * step * 0.5;
+              const jitterY = (Math.random() - 0.5) * step * 0.5;
+              const sizePhase = Math.random() * Math.PI * 2;
+              const sizeAmp = SIZE_AMP_MIN + Math.random() * (SIZE_AMP_MAX - SIZE_AMP_MIN);
+              // カラー属性：粒ごとに明るく甘い色
+              const baseHue = HUE_BASE_MIN + Math.random() * (HUE_BASE_MAX - HUE_BASE_MIN);
+              const sat = 90 + Math.random() * 10;   // 彩度90–100%
+              const lit = 88 + Math.random() * 8;    // 明度88–96%
+              newTargets.push({ x: x + jitterX, y: y + jitterY, r: radius, origX: x, origY: y, sizePhase, sizeAmp, baseHue, sat, lit });
+            }
+          }
+        }
+      }
+      newTargets.sort(function(a, b){ return (a.y - b.y) || (a.x - b.x); });
+      targets = newTargets;
+    }
+
+    function render(t) {
+      ctx.clearRect(0, 0, W, H);
+      const time = t / 1000;
+
+      for (let i = 0; i < targets.length; i++) {
+        const p = targets[i];
+        const waveX = Math.sin(OMEGA * time + p.y * 0.005) * AMP_X;
+        const waveY = Math.cos(OMEGA * time + p.x * 0.005) * AMP_Y;
+        const px = p.x + waveX;
+        const py = p.y + waveY;
+        const r = p.r * (1 + p.sizeAmp * Math.sin(OMEGA_SIZE * time + p.sizePhase));
+        const rMin = p.r * (1 - p.sizeAmp);
+        const rMax = p.r * (1 + p.sizeAmp);
+        const tNorm = Math.max(0, Math.min(1, (r - rMin) / (rMax - rMin || 1)));
+        const hueFromSize = (tNorm - 0.5) * 2 * SIZE_HUE_SWING;
+        const hueFromTime = Math.sin(OMEGA_HUE * time) * TIME_HUE_SWING;
+        const hue = p.baseHue + hueFromSize + hueFromTime;
+
+        ctx.fillStyle = 'hsl(' + hue + ',' + p.sat + '%,' + p.lit + '%)';
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    let lastSec = -1;
+    function loop(ts) {
+      const sec = Math.floor(ts / 1000);
+      if (sec !== lastSec) {
+        lastSec = sec;
+        setTargetsForText(currentTimeString());
+      }
+      render(ts);
+      requestAnimationFrame(loop);
+    }
+
+    resize();
+    requestAnimationFrame(loop);
+  })();
+  </script>
+</body>
+</html>
